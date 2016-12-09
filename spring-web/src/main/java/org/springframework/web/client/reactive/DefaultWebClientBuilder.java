@@ -18,13 +18,9 @@ package org.springframework.web.client.reactive;
 
 import java.util.logging.Level;
 
-import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 import org.springframework.http.client.reactive.ClientHttpConnector;
-import org.springframework.http.client.reactive.ClientHttpResponse;
-import org.springframework.http.codec.BodyExtractor;
-import org.springframework.http.codec.BodyExtractors;
 import org.springframework.util.Assert;
 
 /**
@@ -83,33 +79,6 @@ class DefaultWebClientBuilder implements WebClient.Builder {
 		}
 
 		@Override
-		public <T> Mono<T> retrieveMono(ClientRequest<?> request, Class<? extends T> elementClass) {
-			Assert.notNull(request, "'request' must not be null");
-			Assert.notNull(elementClass, "'elementClass' must not be null");
-
-			return retrieve(request, BodyExtractors.toMono(elementClass))
-					.then(m -> m);
-		}
-
-		@Override
-		public <T> Flux<T> retrieveFlux(ClientRequest<?> request, Class<? extends T> elementClass) {
-			Assert.notNull(request, "'request' must not be null");
-			Assert.notNull(elementClass, "'elementClass' must not be null");
-
-			return retrieve(request, BodyExtractors.toFlux(elementClass))
-					.flatMap(flux -> flux);
-		}
-
-		private <T> Mono<T> retrieve(ClientRequest<?> request,
-				BodyExtractor<T, ? super ClientHttpResponse> extractor) {
-
-			ExchangeFilterFunction errorFilter = ExchangeFilterFunctions.clientOrServerError();
-
-			return errorFilter.filter(request, this::exchange)
-					.map(clientResponse -> clientResponse.body(extractor));
-		}
-
-		@Override
 		public Mono<ClientResponse> exchange(ClientRequest<?> request) {
 			Assert.notNull(request, "'request' must not be null");
 
@@ -126,6 +95,14 @@ class DefaultWebClientBuilder implements WebClient.Builder {
 							this.strategies));
 		}
 
+		@Override
+		public WebClient filter(ExchangeFilterFunction filter) {
+			Assert.notNull(filter, "'filter' must not be null");
+
+			ExchangeFilterFunction composedFilter = filter.andThen(this.filter);
+
+			return new DefaultWebClient(this.clientHttpConnector, this.strategies, composedFilter);
+		}
 	}
 
 	private class NoOpFilter implements ExchangeFilterFunction {

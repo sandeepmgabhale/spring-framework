@@ -111,48 +111,6 @@ public class WebClientIntegrationTests {
 	}
 
 	@Test
-	public void retrieveMono() throws Exception {
-		HttpUrl baseUrl = server.url("/greeting?name=Spring");
-		this.server.enqueue(new MockResponse().setBody("Hello Spring!"));
-
-		ClientRequest<Void> request = ClientRequest.GET(baseUrl.toString()).build();
-
-		Mono<String> result = this.webClient
-				.retrieveMono(request, String.class);
-
-		StepVerifier.create(result)
-				.expectNext("Hello Spring!")
-				.expectComplete()
-				.verify();
-
-		RecordedRequest recordedRequest = server.takeRequest();
-		assertEquals(1, server.getRequestCount());
-		assertEquals("*/*", recordedRequest.getHeader(HttpHeaders.ACCEPT));
-		assertEquals("/greeting?name=Spring", recordedRequest.getPath());
-	}
-
-	@Test
-	public void retrieveFlux() throws Exception {
-		HttpUrl baseUrl = server.url("/greeting?name=Spring");
-		this.server.enqueue(new MockResponse().setBody("Hello Spring!"));
-
-		ClientRequest<Void> request = ClientRequest.GET(baseUrl.toString()).build();
-
-		Flux<String> result = this.webClient
-				.retrieveFlux(request, String.class);
-
-		StepVerifier.create(result)
-				.expectNext("Hello Spring!")
-				.expectComplete()
-				.verify();
-
-		RecordedRequest recordedRequest = server.takeRequest();
-		assertEquals(1, server.getRequestCount());
-		assertEquals("*/*", recordedRequest.getHeader(HttpHeaders.ACCEPT));
-		assertEquals("/greeting?name=Spring", recordedRequest.getPath());
-	}
-
-	@Test
 	public void jsonString() throws Exception {
 		HttpUrl baseUrl = server.url("/json");
 		String content = "{\"bar\":\"barbar\",\"foo\":\"foofoo\"}";
@@ -310,45 +268,32 @@ public class WebClientIntegrationTests {
 	}
 
 	@Test
-	public void retrieveNotFound() throws Exception {
+	public void buildFilter() throws Exception {
 		HttpUrl baseUrl = server.url("/greeting?name=Spring");
-		this.server.enqueue(new MockResponse().setResponseCode(404)
-				.setHeader("Content-Type", "text/plain").setBody("Not Found"));
+		this.server.enqueue(new MockResponse().setHeader("Content-Type", "text/plain").setBody("Hello Spring!"));
+
+		ExchangeFilterFunction filter = (request, next) -> {
+			ClientRequest<?> filteredRequest = ClientRequest.from(request)
+					.header("foo", "bar").build();
+			return next.exchange(filteredRequest);
+		};
+		WebClient filteredClient = WebClient.builder(new ReactorClientHttpConnector())
+				.filter(filter).build();
 
 		ClientRequest<Void> request = ClientRequest.GET(baseUrl.toString()).build();
 
-		Mono<String> result = this.webClient
-				.retrieveMono(request, String.class);
+		Mono<String> result = filteredClient.exchange(request)
+				.then(response -> response.body(toMono(String.class)));
 
 		StepVerifier.create(result)
-				.expectError(WebClientException.class)
-				.verify(Duration.ofSeconds(3));
+				.expectNext("Hello Spring!")
+				.expectComplete()
+				.verify();
 
 		RecordedRequest recordedRequest = server.takeRequest();
 		assertEquals(1, server.getRequestCount());
-		assertEquals("*/*", recordedRequest.getHeader(HttpHeaders.ACCEPT));
-		assertEquals("/greeting?name=Spring", recordedRequest.getPath());
-	}
+		assertEquals("bar", recordedRequest.getHeader("foo"));
 
-	@Test
-	public void retrieveServerError() throws Exception {
-		HttpUrl baseUrl = server.url("/greeting?name=Spring");
-		this.server.enqueue(new MockResponse().setResponseCode(500)
-				.setHeader("Content-Type", "text/plain").setBody("Not Found"));
-
-		ClientRequest<Void> request = ClientRequest.GET(baseUrl.toString()).build();
-
-		Mono<String> result = this.webClient
-				.retrieveMono(request, String.class);
-
-		StepVerifier.create(result)
-				.expectError(WebClientException.class)
-				.verify(Duration.ofSeconds(3));
-
-		RecordedRequest recordedRequest = server.takeRequest();
-		assertEquals(1, server.getRequestCount());
-		assertEquals("*/*", recordedRequest.getHeader(HttpHeaders.ACCEPT));
-		assertEquals("/greeting?name=Spring", recordedRequest.getPath());
 	}
 
 	@Test
@@ -361,8 +306,8 @@ public class WebClientIntegrationTests {
 					.header("foo", "bar").build();
 			return next.exchange(filteredRequest);
 		};
-		WebClient filteredClient = WebClient.builder(new ReactorClientHttpConnector())
-				.filter(filter).build();
+		WebClient client = WebClient.create(new ReactorClientHttpConnector());
+		WebClient filteredClient = client.filter(filter);
 
 		ClientRequest<Void> request = ClientRequest.GET(baseUrl.toString()).build();
 

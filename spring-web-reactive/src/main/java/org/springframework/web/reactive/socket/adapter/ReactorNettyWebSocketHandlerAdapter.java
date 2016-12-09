@@ -15,10 +15,11 @@
  */
 package org.springframework.web.reactive.socket.adapter;
 
-import io.reactivex.netty.protocol.http.ws.WebSocketConnection;
-import reactor.core.publisher.Mono;
-import rx.Observable;
-import rx.RxReactiveStreams;
+import java.util.function.BiFunction;
+
+import org.reactivestreams.Publisher;
+import reactor.ipc.netty.http.HttpInbound;
+import reactor.ipc.netty.http.HttpOutbound;
 
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
 import org.springframework.http.server.reactive.ServerHttpRequest;
@@ -27,19 +28,20 @@ import org.springframework.util.Assert;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 
 /**
- * RxNetty {@code WebSocketHandler} implementation adapting and delegating to a
- * Spring {@link WebSocketHandler}.
+ * Reactor Netty {@code WebSocketHandler} implementation adapting and
+ * delegating to a Spring {@link WebSocketHandler}.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
  */
-public class RxNettyWebSocketHandlerAdapter extends WebSocketHandlerAdapterSupport
-		implements io.reactivex.netty.protocol.http.ws.server.WebSocketHandler {
+public class ReactorNettyWebSocketHandlerAdapter extends WebSocketHandlerAdapterSupport
+		implements BiFunction<HttpInbound, HttpOutbound, Publisher<Void>> {
+
 
 	private final NettyDataBufferFactory bufferFactory;
 
 
-	public RxNettyWebSocketHandlerAdapter(ServerHttpRequest request, ServerHttpResponse response,
+	public ReactorNettyWebSocketHandlerAdapter(ServerHttpRequest request, ServerHttpResponse response,
 			WebSocketHandler handler) {
 
 		super(request, handler);
@@ -53,10 +55,10 @@ public class RxNettyWebSocketHandlerAdapter extends WebSocketHandlerAdapterSuppo
 	}
 
 	@Override
-	public Observable<Void> handle(WebSocketConnection conn) {
-		RxNettyWebSocketSession session = new RxNettyWebSocketSession(conn, getUri(), getBufferFactory());
-		Mono<Void> result = getDelegate().handle(session);
-		return RxReactiveStreams.toObservable(result);
+	public Publisher<Void> apply(HttpInbound inbound, HttpOutbound outbound) {
+		ReactorNettyWebSocketSession session =
+				new ReactorNettyWebSocketSession(inbound, outbound, getUri(), getBufferFactory());
+		return getDelegate().handle(session);
 	}
 
 }

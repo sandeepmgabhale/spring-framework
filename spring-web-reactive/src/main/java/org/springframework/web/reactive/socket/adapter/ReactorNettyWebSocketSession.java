@@ -18,17 +18,17 @@ package org.springframework.web.reactive.socket.adapter;
 import java.net.URI;
 
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
-import io.reactivex.netty.protocol.http.ws.WebSocketConnection;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import rx.Observable;
-import rx.RxReactiveStreams;
+import reactor.ipc.netty.http.HttpInbound;
+import reactor.ipc.netty.http.HttpOutbound;
 
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
 import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
+
 
 /**
  * Spring {@link WebSocketSession} adapter for RxNetty's
@@ -37,32 +37,61 @@ import org.springframework.web.reactive.socket.WebSocketSession;
  * @author Rossen Stoyanchev
  * @since 5.0
  */
-public class RxNettyWebSocketSession extends NettyWebSocketSessionSupport<WebSocketConnection> {
+public class ReactorNettyWebSocketSession
+		extends NettyWebSocketSessionSupport<ReactorNettyWebSocketSession.WebSocketConnection> {
 
 
-	public RxNettyWebSocketSession(WebSocketConnection conn, URI uri, NettyDataBufferFactory factory) {
-		super(conn, uri, factory);
+	protected ReactorNettyWebSocketSession(HttpInbound inbound, HttpOutbound outbound,
+			URI uri, NettyDataBufferFactory factory) {
+
+		super(new WebSocketConnection(inbound, outbound), uri, factory);
 	}
 
 
 	@Override
 	public Flux<WebSocketMessage> receive() {
-		Observable<WebSocketFrame> observable = getDelegate().getInput();
-		Flux<WebSocketFrame> flux = Flux.from(RxReactiveStreams.toPublisher(observable));
-		return toMessageFlux(flux);
+		HttpInbound inbound = getDelegate().getHttpInbound();
+		return toMessageFlux(inbound.receiveObject().cast(WebSocketFrame.class));
 	}
 
 	@Override
 	public Mono<Void> send(Publisher<WebSocketMessage> messages) {
-		Observable<WebSocketFrame> frames = RxReactiveStreams.toObservable(messages).map(this::toFrame);
-		Observable<Void> completion = getDelegate().writeAndFlushOnEach(frames);
-		return Mono.from(RxReactiveStreams.toPublisher(completion));
+		Flux<WebSocketFrame> frameFlux = Flux.from(messages).map(this::toFrame);
+		HttpOutbound outbound = getDelegate().getHttpOutbound();
+		outbound.flushEach();
+		return outbound.sendObject(frameFlux);
 	}
 
 	@Override
 	protected Mono<Void> closeInternal(CloseStatus status) {
-		Observable<Void> completion = getDelegate().close();
-		return Mono.from(RxReactiveStreams.toPublisher(completion));
+		return Mono.error(new UnsupportedOperationException(
+				"Currently in Reactor Netty applications are expected to use the Cancellation" +
+						"returned from subscribing to the input Flux to close the WebSocket session."));
+	}
+
+
+	/**
+	 * Simple container for {@link HttpInbound} and {@link HttpOutbound}.
+	 */
+	public static class WebSocketConnection {
+
+		private final HttpInbound inbound;
+
+		private final HttpOutbound outbound;
+
+
+		public WebSocketConnection(HttpInbound inbound, HttpOutbound outbound) {
+			this.inbound = inbound;
+			this.outbound = outbound;
+		}
+
+		public HttpInbound getHttpInbound() {
+			return this.inbound;
+		}
+
+		public HttpOutbound getHttpOutbound() {
+			return this.outbound;
+		}
 	}
 
 }
