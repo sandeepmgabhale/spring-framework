@@ -15,17 +15,21 @@
  */
 package org.springframework.web.reactive.socket.server.upgrade;
 
-import java.util.List;
-import java.util.Map;
+import java.security.Principal;
+import java.util.Optional;
 
+import io.reactivex.netty.protocol.http.HttpHandlerNames;
+import io.reactivex.netty.protocol.http.server.HttpServerResponse;
+import io.reactivex.netty.protocol.http.ws.server.WebSocketHandshaker;
 import reactor.core.publisher.Mono;
-import rx.Observable;
 import rx.RxReactiveStreams;
 
-import org.springframework.http.server.reactive.RxNettyServerHttpRequest;
+import org.springframework.core.io.buffer.NettyDataBufferFactory;
 import org.springframework.http.server.reactive.RxNettyServerHttpResponse;
+import org.springframework.http.server.reactive.ServerHttpRequest;
+import org.springframework.web.reactive.socket.HandshakeInfo;
 import org.springframework.web.reactive.socket.WebSocketHandler;
-import org.springframework.web.reactive.socket.adapter.RxNettyWebSocketHandlerAdapter;
+import org.springframework.web.reactive.socket.adapter.RxNettyWebSocketSession;
 import org.springframework.web.reactive.socket.server.RequestUpgradeStrategy;
 import org.springframework.web.server.ServerWebExchange;
 
@@ -35,27 +39,43 @@ import org.springframework.web.server.ServerWebExchange;
  * @author Rossen Stoyanchev
  * @since 5.0
  */
+@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
 public class RxNettyRequestUpgradeStrategy implements RequestUpgradeStrategy {
 
+
 	@Override
-	public Mono<Void> upgrade(ServerWebExchange exchange, WebSocketHandler webSocketHandler) {
+	public Mono<Void> upgrade(ServerWebExchange exchange, WebSocketHandler handler,
+			Optional<String> subProtocol) {
 
-		RxNettyServerHttpRequest request = (RxNettyServerHttpRequest) exchange.getRequest();
 		RxNettyServerHttpResponse response = (RxNettyServerHttpResponse) exchange.getResponse();
+		HttpServerResponse<?> rxNettyResponse = response.getRxNettyResponse();
 
-		RxNettyWebSocketHandlerAdapter rxNettyHandler =
-				new RxNettyWebSocketHandlerAdapter(request, response, webSocketHandler);
+		HandshakeInfo info = getHandshakeInfo(exchange, subProtocol);
+		NettyDataBufferFactory factory = (NettyDataBufferFactory) response.bufferFactory();
 
-		Observable<Void> completion = response.getRxNettyResponse()
-				.acceptWebSocketUpgrade(rxNettyHandler)
-				.subprotocol(getSubProtocols(webSocketHandler));
+		WebSocketHandshaker handshaker = rxNettyResponse
+				.acceptWebSocketUpgrade(conn -> {
+					RxNettyWebSocketSession session = new RxNettyWebSocketSession(conn, info, factory);
+					String name = HttpHandlerNames.WsServerDecoder.getName();
+					session.aggregateFrames(rxNettyResponse.unsafeNettyChannel(), name);
+					return RxReactiveStreams.toObservable(handler.handle(session));
+				});
 
-		return Mono.from(RxReactiveStreams.toPublisher(completion));
+		if (subProtocol.isPresent()) {
+			handshaker = handshaker.subprotocol(subProtocol.get());
+		}
+		else {
+			// TODO: https://github.com/reactor/reactor-netty/issues/20
+			handshaker = handshaker.subprotocol(new String[0]);
+		}
+
+		return Mono.from(RxReactiveStreams.toPublisher(handshaker));
 	}
 
-	private static String[] getSubProtocols(WebSocketHandler webSocketHandler) {
-		List<String> subProtocols = webSocketHandler.getSubProtocols();
-		return subProtocols.toArray(new String[subProtocols.size()]);
+	private HandshakeInfo getHandshakeInfo(ServerWebExchange exchange, Optional<String> protocol) {
+		ServerHttpRequest request = exchange.getRequest();
+		Mono<Principal> principal = exchange.getPrincipal();
+		return new HandshakeInfo(request.getURI(), request.getHeaders(), principal, protocol);
 	}
 
 }

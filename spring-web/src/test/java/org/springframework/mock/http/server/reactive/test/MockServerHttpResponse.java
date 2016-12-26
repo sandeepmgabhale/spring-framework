@@ -18,6 +18,7 @@ package org.springframework.mock.http.server.reactive.test;
 
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import org.reactivestreams.Publisher;
@@ -40,6 +41,7 @@ import org.springframework.util.MultiValueMap;
 /**
  * Mock implementation of {@link ServerHttpResponse}.
  * @author Rossen Stoyanchev
+ * @since 5.0
  */
 public class MockServerHttpResponse implements ServerHttpResponse {
 
@@ -48,6 +50,8 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 	private final HttpHeaders headers = new HttpHeaders();
 
 	private final MultiValueMap<String, ResponseCookie> cookies = new LinkedMultiValueMap<>();
+
+	private Function<String, String> urlEncoder = url -> url;
 
 	private Flux<DataBuffer> body;
 
@@ -77,6 +81,16 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 		return this.cookies;
 	}
 
+	@Override
+	public String encodeUrl(String url) {
+		return (this.urlEncoder != null ? this.urlEncoder.apply(url) : url);
+	}
+
+	@Override
+	public void registerUrlEncoder(Function<String, String> encoder) {
+		this.urlEncoder = (this.urlEncoder != null ? this.urlEncoder.andThen(encoder) : encoder);
+	}
+
 	public Publisher<DataBuffer> getBody() {
 		return this.body;
 	}
@@ -93,7 +107,7 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 
 	@Override
 	public Mono<Void> writeAndFlushWith(Publisher<? extends Publisher<? extends DataBuffer>> body) {
-		this.bodyWithFlushes = Flux.from(body).map(p -> Flux.from(p));
+		this.bodyWithFlushes = Flux.from(body).map(Flux::from);
 		return this.bodyWithFlushes.then();
 	}
 
@@ -118,22 +132,22 @@ public class MockServerHttpResponse implements ServerHttpResponse {
 	 */
 	public Mono<String> getBodyAsString() {
 		Charset charset = getCharset();
-		Charset charsetToUse = (charset != null ? charset : StandardCharsets.UTF_8);
-		return Flux.from(this.body)
-				.reduce(this.bufferFactory.allocateBuffer(), (previous, current) -> {
+		return Flux.from(getBody())
+				.reduce(bufferFactory().allocateBuffer(), (previous, current) -> {
 					previous.write(current);
 					DataBufferUtils.release(current);
 					return previous;
 				})
-				.map(buffer -> DataBufferTestUtils.dumpString(buffer, charsetToUse));
+				.map(buffer -> DataBufferTestUtils.dumpString(buffer, charset));
 	}
 
 	private Charset getCharset() {
+		Charset charset = null;
 		MediaType contentType = getHeaders().getContentType();
 		if (contentType != null) {
-			return contentType.getCharset();
+			charset = contentType.getCharset();
 		}
-		return null;
+		return (charset != null ? charset : StandardCharsets.UTF_8);
 	}
 
 }

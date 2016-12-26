@@ -36,6 +36,7 @@ import reactor.core.publisher.Mono;
 
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.core.io.buffer.DataBufferFactory;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseCookie;
 import org.springframework.http.ZeroCopyHttpOutputMessage;
@@ -138,24 +139,27 @@ public class UndertowServerHttpResponse extends AbstractListenerServerHttpRespon
 	}
 
 
-	private static class ResponseBodyProcessor extends AbstractResponseBodyProcessor {
+	private static class ResponseBodyProcessor extends AbstractListenerWriteProcessor<DataBuffer> {
 
-		private final ChannelListener<StreamSinkChannel> listener = new WriteListener();
-
-		private final StreamSinkChannel responseChannel;
+		private final StreamSinkChannel channel;
 
 		private volatile ByteBuffer byteBuffer;
 
 
-		public ResponseBodyProcessor(StreamSinkChannel responseChannel) {
-			Assert.notNull(responseChannel, "'responseChannel' must not be null");
-			this.responseChannel = responseChannel;
+		public ResponseBodyProcessor(StreamSinkChannel channel) {
+			Assert.notNull(channel, "StreamSinkChannel must not be null");
+			this.channel = channel;
 		}
 
 
 		public void registerListener() {
-			this.responseChannel.getWriteSetter().set(this.listener);
-			this.responseChannel.resumeWrites();
+			this.channel.getWriteSetter().set((ChannelListener<StreamSinkChannel>) c -> onWritePossible());
+			this.channel.resumeWrites();
+		}
+
+		@Override
+		protected boolean isWritePossible() {
+			return false;
 		}
 
 		@Override
@@ -179,7 +183,7 @@ public class UndertowServerHttpResponse extends AbstractListenerServerHttpRespon
 			int written;
 			int totalWritten = 0;
 			do {
-				written = this.responseChannel.write(byteBuffer);
+				written = this.channel.write(byteBuffer);
 				totalWritten += written;
 			}
 			while (byteBuffer.hasRemaining() && written > 0);
@@ -187,30 +191,32 @@ public class UndertowServerHttpResponse extends AbstractListenerServerHttpRespon
 		}
 
 		@Override
-		protected void receiveBuffer(DataBuffer dataBuffer) {
-			super.receiveBuffer(dataBuffer);
+		protected void receiveData(DataBuffer dataBuffer) {
+			super.receiveData(dataBuffer);
 			this.byteBuffer = dataBuffer.asByteBuffer();
 		}
 
 		@Override
-		protected void releaseBuffer() {
-			super.releaseBuffer();
+		protected void releaseData() {
+			if (logger.isTraceEnabled()) {
+				logger.trace("releaseBuffer: " + this.currentData);
+			}
+			DataBufferUtils.release(this.currentData);
+			this.currentData = null;
+
 			this.byteBuffer = null;
 		}
 
-		private class WriteListener implements ChannelListener<StreamSinkChannel> {
-
-			@Override
-			public void handleEvent(StreamSinkChannel channel) {
-				onWritePossible();
-			}
+		@Override
+		protected boolean isDataEmpty(DataBuffer dataBuffer) {
+			return dataBuffer.readableByteCount() == 0;
 		}
 	}
 
-	private class ResponseBodyFlushProcessor extends AbstractResponseBodyFlushProcessor {
+	private class ResponseBodyFlushProcessor extends AbstractListenerWriteFlushProcessor<DataBuffer> {
 
 		@Override
-		protected Processor<? super DataBuffer, Void> createBodyProcessor() {
+		protected Processor<? super DataBuffer, Void> createWriteProcessor() {
 			return UndertowServerHttpResponse.this.createBodyProcessor();
 		}
 

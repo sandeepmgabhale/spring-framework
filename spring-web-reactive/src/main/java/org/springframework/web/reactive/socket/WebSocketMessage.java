@@ -15,13 +15,18 @@
  */
 package org.springframework.web.reactive.socket;
 
+import java.nio.charset.StandardCharsets;
+
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferUtils;
 import org.springframework.util.Assert;
 import org.springframework.util.ObjectUtils;
 
 /**
  * Representation of a WebSocket message.
- * Use one of the static factory methods in this class to create a message.
+ * <p>See static factory methods in {@link WebSocketSession} for creating messages
+ * with the {@link org.springframework.core.io.buffer.DataBufferFactory
+ * DataBufferFactory} for the session.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -34,9 +39,12 @@ public class WebSocketMessage {
 
 
 	/**
-	 * Private constructor. See static factory methods.
+	 * Constructor for a WebSocketMessage.
+	 * <p>See static factory methods in {@link WebSocketSession} or alternatively
+	 * use {@link WebSocketSession#bufferFactory()} to create the payload and
+	 * then invoke this constructor.
 	 */
-	private WebSocketMessage(Type type, DataBuffer payload) {
+	public WebSocketMessage(Type type, DataBuffer payload) {
 		Assert.notNull(type, "'type' must not be null");
 		Assert.notNull(payload, "'payload' must not be null");
 		this.type = type;
@@ -58,6 +66,43 @@ public class WebSocketMessage {
 		return this.payload;
 	}
 
+	/**
+	 * Return the message payload as UTF-8 text. This is a useful for text
+	 * WebSocket messages.
+	 */
+	public String getPayloadAsText() {
+		byte[] bytes = new byte[this.payload.readableByteCount()];
+		this.payload.read(bytes);
+		return new String(bytes, StandardCharsets.UTF_8);
+	}
+
+	/**
+	 * Retain the data buffer for the message payload, which is useful on
+	 * runtimes (e.g. Netty) with pooled buffers. A shortcut for:
+	 * <pre>
+	 * DataBuffer payload = message.getPayload();
+	 * DataBufferUtils.retain(payload);
+	 * </pre>
+	 * @see DataBufferUtils#retain(DataBuffer)
+	 */
+	public WebSocketMessage retain() {
+		DataBufferUtils.retain(this.payload);
+		return this;
+	}
+
+	/**
+	 * Release the payload {@code DataBuffer} which is useful on runtimes
+	 * (e.g. Netty) with pooled buffers such as Netty. A shortcut for:
+	 * <pre>
+	 * DataBuffer payload = message.getPayload();
+	 * DataBufferUtils.release(payload);
+	 * </pre>
+	 * @see DataBufferUtils#release(DataBuffer)
+	 */
+	public void release() {
+		DataBufferUtils.release(this.payload);
+	}
+
 
 	@Override
 	public boolean equals(Object other) {
@@ -75,42 +120,6 @@ public class WebSocketMessage {
 	@Override
 	public int hashCode() {
 		return this.type.hashCode() * 29 + this.payload.hashCode();
-	}
-
-
-	/**
-	 * Factory method to create a text WebSocket message.
-	 */
-	public static WebSocketMessage text(DataBuffer payload) {
-		return create(Type.TEXT, payload);
-	}
-
-	/**
-	 * Factory method to create a binary WebSocket message.
-	 */
-	public static WebSocketMessage binary(DataBuffer payload) {
-		return create(Type.BINARY, payload);
-	}
-
-	/**
-	 * Factory method to create a ping WebSocket message.
-	 */
-	public static WebSocketMessage ping(DataBuffer payload) {
-		return create(Type.PING, payload);
-	}
-
-	/**
-	 * Factory method to create a pong WebSocket message.
-	 */
-	public static WebSocketMessage pong(DataBuffer payload) {
-		return create(Type.PONG, payload);
-	}
-
-	/**
-	 * Factory method to create a WebSocket message of the given type.
-	 */
-	public static WebSocketMessage create(Type type, DataBuffer payload) {
-		return new WebSocketMessage(type, payload);
 	}
 
 

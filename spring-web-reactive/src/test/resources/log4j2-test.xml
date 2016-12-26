@@ -8,7 +8,8 @@
 	<Loggers>
 		<Logger name="org.springframework.http" level="debug" />
 		<Logger name="org.springframework.web" level="debug" />
-		<Logger name="reactor" level="debug" />
+		<Logger name="reactor" level="info" />
+		<Logger name="io.reactivex" level="info" />
 		<Root level="error">
 			<AppenderRef ref="Console" />
 		</Root>

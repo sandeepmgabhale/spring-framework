@@ -15,31 +15,35 @@
  */
 package org.springframework.web.reactive.socket.server.support;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Optional;
 
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 import reactor.core.publisher.Mono;
 
 import org.springframework.context.Lifecycle;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.server.reactive.ServerHttpRequest;
-import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.util.Assert;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ReflectionUtils;
+import org.springframework.util.StringUtils;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.server.RequestUpgradeStrategy;
 import org.springframework.web.reactive.socket.server.WebSocketService;
 import org.springframework.web.server.MethodNotAllowedException;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.server.ServerWebInputException;
 
 /**
- * A {@code WebSocketService} implementation that handles a WebSocket handshake
- * and upgrades to a WebSocket interaction through the configured or
- * auto-detected {@link RequestUpgradeStrategy}.
+ * {@code WebSocketService} implementation that handles a WebSocket HTTP
+ * handshake request by delegating to a {@link RequestUpgradeStrategy} which
+ * is either auto-detected (no-arg constructor) from the classpath but can
+ * also be explicitly configured.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -48,9 +52,27 @@ public class HandshakeWebSocketService implements WebSocketService, Lifecycle {
 
 	private static final String SEC_WEBSOCKET_KEY = "Sec-WebSocket-Key";
 
+	private static final String SEC_WEBSOCKET_PROTOCOL = "Sec-WebSocket-Protocol";
+
+
+	private static final boolean tomcatPresent = ClassUtils.isPresent(
+			"org.apache.tomcat.websocket.server.WsHttpUpgradeHandler",
+			HandshakeWebSocketService.class.getClassLoader());
+
+	private static final boolean jettyPresent = ClassUtils.isPresent(
+			"org.eclipse.jetty.websocket.server.WebSocketServerFactory",
+			HandshakeWebSocketService.class.getClassLoader());
+
+	private static final boolean reactorNettyPresent = ClassUtils.isPresent(
+			"reactor.ipc.netty.http.server.HttpServerResponse",
+			HandshakeWebSocketService.class.getClassLoader());
 
 	private static final boolean rxNettyPresent = ClassUtils.isPresent(
-			"io.reactivex.netty.protocol.http.ws.WebSocketConnection",
+			"io.reactivex.netty.protocol.http.server.HttpServerResponse",
+			HandshakeWebSocketService.class.getClassLoader());
+
+	private static final boolean undertowPresent = ClassUtils.isPresent(
+			"io.undertow.websockets.WebSocketProtocolHandshakeHandler",
 			HandshakeWebSocketService.class.getClassLoader());
 
 
@@ -81,8 +103,20 @@ public class HandshakeWebSocketService implements WebSocketService, Lifecycle {
 
 	private static RequestUpgradeStrategy initUpgradeStrategy() {
 		String className;
-		if (rxNettyPresent) {
+		if (tomcatPresent) {
+			className = "TomcatRequestUpgradeStrategy";
+		}
+		else if (jettyPresent) {
+			className = "JettyRequestUpgradeStrategy";
+		}
+		else if (reactorNettyPresent) {
+			className = "ReactorNettyRequestUpgradeStrategy";
+		}
+		else if (rxNettyPresent) {
 			className = "RxNettyRequestUpgradeStrategy";
+		}
+		else if (undertowPresent) {
+			className = "UndertowRequestUpgradeStrategy";
 		}
 		else {
 			throw new IllegalStateException("No suitable default RequestUpgradeStrategy found");
@@ -142,50 +176,54 @@ public class HandshakeWebSocketService implements WebSocketService, Lifecycle {
 
 
 	@Override
-	public Mono<Void> handleRequest(ServerWebExchange exchange, WebSocketHandler webSocketHandler) {
+	public Mono<Void> handleRequest(ServerWebExchange exchange, WebSocketHandler handler) {
 
 		ServerHttpRequest request = exchange.getRequest();
-		ServerHttpResponse response = exchange.getResponse();
+		HttpMethod method = request.getMethod();
+		HttpHeaders headers = request.getHeaders();
 
-		if (logger.isTraceEnabled()) {
-			logger.trace("Processing " + request.getMethod() + " " + request.getURI());
+		if (logger.isDebugEnabled()) {
+			logger.debug("Handling " + request.getURI() + " with headers: " + headers);
 		}
 
-		if (HttpMethod.GET != request.getMethod()) {
-			return Mono.error(new MethodNotAllowedException(
-					request.getMethod().name(), Collections.singleton("GET")));
+		if (HttpMethod.GET != method) {
+			return Mono.error(new MethodNotAllowedException(method.name(), Collections.singleton("GET")));
 		}
 
-		if (!isWebSocketUpgrade(request)) {
-			response.setStatusCode(HttpStatus.BAD_REQUEST);
-			return response.setComplete();
+		if (!"WebSocket".equalsIgnoreCase(headers.getUpgrade())) {
+			return handleBadRequest("Invalid 'Upgrade' header: " + headers);
 		}
 
-		return getUpgradeStrategy().upgrade(exchange, webSocketHandler);
+		List<String> connectionValue = headers.getConnection();
+		if (!connectionValue.contains("Upgrade") && !connectionValue.contains("upgrade")) {
+			return handleBadRequest("Invalid 'Connection' header: " + headers);
+		}
+
+		String key = headers.getFirst(SEC_WEBSOCKET_KEY);
+		if (key == null) {
+			return handleBadRequest("Missing \"Sec-WebSocket-Key\" header");
+		}
+
+		Optional<String> protocol = selectProtocol(headers, handler);
+		return this.upgradeStrategy.upgrade(exchange, handler, protocol);
 	}
 
-	private boolean isWebSocketUpgrade(ServerHttpRequest request) {
-		if (!"WebSocket".equalsIgnoreCase(request.getHeaders().getUpgrade())) {
-			if (logger.isErrorEnabled()) {
-				logger.error("Invalid 'Upgrade' header: " + request.getHeaders());
-			}
-			return false;
+	private Mono<Void> handleBadRequest(String reason) {
+		if (logger.isDebugEnabled()) {
+			logger.debug(reason);
 		}
-		List<String> connectionValue = request.getHeaders().getConnection();
-		if (!connectionValue.contains("Upgrade") && !connectionValue.contains("upgrade")) {
-			if (logger.isErrorEnabled()) {
-				logger.error("Invalid 'Connection' header: " + request.getHeaders());
-			}
-			return false;
+		return Mono.error(new ServerWebInputException(reason));
+	}
+
+	private Optional<String> selectProtocol(HttpHeaders headers, WebSocketHandler handler) {
+		String protocolHeader = headers.getFirst(SEC_WEBSOCKET_PROTOCOL);
+		if (protocolHeader == null) {
+			return Optional.empty();
 		}
-		String key = request.getHeaders().getFirst(SEC_WEBSOCKET_KEY);
-		if (key == null) {
-			if (logger.isErrorEnabled()) {
-				logger.error("Missing \"Sec-WebSocket-Key\" header");
-			}
-			return false;
-		}
-		return true;
+		String[] protocols = handler.getSubProtocols();
+		return StringUtils.commaDelimitedListToSet(protocolHeader).stream()
+				.filter(protocol -> Arrays.stream(protocols).anyMatch(protocol::equals))
+				.findFirst();
 	}
 
 }

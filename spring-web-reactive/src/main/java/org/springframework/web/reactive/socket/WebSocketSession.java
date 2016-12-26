@@ -15,14 +15,25 @@
  */
 package org.springframework.web.reactive.socket;
 
-import java.net.URI;
+import java.util.function.Function;
 
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
+import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.core.io.buffer.DataBufferFactory;
+
 /**
- * Representation for a WebSocket session.
+ * Represents a WebSocket session with Reactive Streams input and output.
+ *
+ * <p>On the server side a WebSocket session can be handled by mapping
+ * requests to a {@link WebSocketHandler} and ensuring there is a
+ * {@link org.springframework.web.reactive.socket.server.support.WebSocketHandlerAdapter
+ * WebSocketHandlerAdapter} strategy registered in Spring configuration.
+ * On the client side a {@link WebSocketHandler} can be provided to a
+ * {@link org.springframework.web.reactive.socket.client.WebSocketClient
+ * WebSocketClient}.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -35,9 +46,15 @@ public interface WebSocketSession {
 	String getId();
 
 	/**
-	 * Return the WebSocket endpoint URI.
+	 * Return information from the handshake request.
 	 */
-	URI getUri();
+	HandshakeInfo getHandshakeInfo();
+
+	/**
+	 * Return a {@code DataBuffer} Factory to create message payloads.
+	 * @return the buffer factory for the session
+	 */
+	DataBufferFactory bufferFactory();
 
 	/**
 	 * Get the flux of incoming messages.
@@ -62,5 +79,32 @@ public interface WebSocketSession {
 	 * @param status the close status
 	 */
 	Mono<Void> close(CloseStatus status);
+
+
+	// WebSocketMessage factory methods
+
+	/**
+	 * Factory method to create a text {@link WebSocketMessage} using the
+	 * {@link #bufferFactory()} for the session.
+	 */
+	WebSocketMessage textMessage(String payload);
+
+	/**
+	 * Factory method to create a binary WebSocketMessage using the
+	 * {@link #bufferFactory()} for the session.
+	 */
+	WebSocketMessage binaryMessage(Function<DataBufferFactory, DataBuffer> payloadFactory);
+
+	/**
+	 * Factory method to create a ping WebSocketMessage using the
+	 * {@link #bufferFactory()} for the session.
+	 */
+	WebSocketMessage pingMessage(Function<DataBufferFactory, DataBuffer> payloadFactory);
+
+	/**
+	 * Factory method to create a pong WebSocketMessage using the
+	 * {@link #bufferFactory()} for the session.
+	 */
+	WebSocketMessage pongMessage(Function<DataBufferFactory, DataBuffer> payloadFactory);
 
 }

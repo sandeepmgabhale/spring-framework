@@ -40,7 +40,7 @@ configure(allprojects) { project ->
 	ext.eclipselinkVersion     = "2.6.4"
 	ext.ehcacheVersion         = "2.10.3"
 	ext.ehcachejcacheVersion   = "1.0.1"
-	ext.ehcache3Version        = "3.1.3"
+	ext.ehcache3Version        = "3.2.0"
 	ext.ejbApiVersion          = "3.2"
 	ext.elApiVersion           = "3.0.1-b04"
 	ext.fileuploadVersion      = "1.3.2"
@@ -48,8 +48,8 @@ configure(allprojects) { project ->
 	ext.groovyVersion          = "2.4.7"
 	ext.gsonVersion            = "2.8.0"
 	ext.hamcrestVersion        = "1.3"
-	ext.hibernate5Version      = "5.2.5.Final"
-	ext.hibval5Version         = "5.3.3.Final"
+	ext.hibernate5Version      = "5.2.6.Final"
+	ext.hibval5Version         = "5.4.0.Beta1"
 	ext.hsqldbVersion          = "2.3.4"
 	ext.httpasyncVersion       = "4.1.2"
 	ext.httpclientVersion      = "4.5.2"
@@ -69,35 +69,35 @@ configure(allprojects) { project ->
 	ext.junitVersion           = "4.12"
 	ext.junitJupiterVersion    = '5.0.0-M3'
 	ext.junitPlatformVersion   = '1.0.0-M3'
-	ext.kotlinVersion          = "1.0.5-2"
+	ext.kotlinVersion          = "1.0.5-3"
 	ext.log4jVersion           = '2.7'
 	ext.nettyVersion           = "4.1.6.Final"
 	ext.okhttpVersion          = "2.7.5"
-	ext.okhttp3Version         = "3.4.2"
+	ext.okhttp3Version         = "3.5.0"
 	ext.poiVersion             = "3.15"
 	ext.protobufVersion        = "3.1.0"
 	ext.quartzVersion          = "2.2.3"
 	ext.reactivestreamsVersion = "1.0.0"
-	ext.reactorCoreVersion     = '3.0.3.RELEASE'
-	ext.reactorNettyVersion    = '0.6.0.BUILD-SNAPSHOT'
+	ext.reactorCoreVersion     = '3.0.4.RELEASE'
+	ext.reactorNettyVersion    = '0.6.0.RELEASE'
 	ext.romeVersion            = "1.7.0"
-	ext.rxjavaVersion          = '1.2.3'
+	ext.rxjavaVersion          = '1.2.4'
 	ext.rxjavaAdapterVersion   = '1.2.1'
-	ext.rxjava2Version         = '2.0.2'
+	ext.rxjava2Version         = '2.0.3'
 	ext.rxnettyVersion         = '0.5.2-rc.5'
 	ext.servletVersion         = "3.1.0"
-	ext.slf4jVersion           = "1.7.21"
+	ext.slf4jVersion           = "1.7.22"
 	ext.snakeyamlVersion       = "1.17"
 	ext.snifferVersion         = "1.15"
-	ext.testngVersion          = "6.9.12"
+	ext.testngVersion          = "6.10"
 	ext.tiles3Version          = "3.0.7"
-	ext.tomcatVersion          = "8.5.8"
+	ext.tomcatVersion          = "8.5.9"
 	ext.tyrusVersion           = "1.13"
-	ext.undertowVersion        = "1.4.6.Final"
+	ext.undertowVersion        = "1.4.7.Final"
 	ext.websocketVersion       = "1.1"
 	ext.woodstoxVersion        = "5.0.3"
-	ext.xmlunitVersion         = "2.2.1"
-	ext.xnioVersion            = "3.4.1.Final"
+	ext.xmlunitVersion         = "2.3.0"
+	ext.xnioVersion            = "3.4.2.Final"
 	ext.xstreamVersion         = "1.4.9"
 
 	ext.gradleScriptDir = "${rootProject.projectDir}/gradle"
@@ -172,7 +172,7 @@ configure(allprojects) { project ->
 	repositories {
 		maven { url "https://repo.spring.io/libs-release" }
 		maven { url "https://repo.spring.io/milestone" }
-		maven { url "https://repo.spring.io/snapshot" } // reactor-netty 0.6 snapshots
+		maven { url "https://repo.spring.io/snapshot" } // reactor-netty still pulls reactor-ipc 0.6 snapshots
 	}
 
 	dependencies {
@@ -312,6 +312,7 @@ configure(subprojects - project(":spring-build-src")) { subproject ->
 
 project("spring-build-src") {
 	description = "Exposes gradle buildSrc for IDE support"
+
 	apply plugin: "groovy"
 
 	dependencies {
@@ -325,8 +326,10 @@ project("spring-build-src") {
 project("spring-core") {
 	description = "Spring Core"
 
-	// Disabled since Kotlin compiler does not support JDK 9 yet
-	//apply plugin: "kotlin"
+	// Kotlin compiler does not support JDK 9 yet
+	if (!JavaVersion.current().java9Compatible) {
+		apply plugin: "kotlin"
+	}
 
 	// As of Spring 4.0.3, spring-core includes asm 5.x and repackages cglib 3.2, inlining
 	// both into the spring-core jar. cglib 3.2 itself depends on asm 5.x and is therefore
@@ -427,11 +430,18 @@ project("spring-core") {
 project("spring-beans") {
 	description = "Spring Beans"
 
+	// Kotlin compiler does not support JDK 9 yet
+	if (!JavaVersion.current().java9Compatible) {
+		apply plugin: "kotlin"
+	}
+
 	dependencies {
 		compile(project(":spring-core"))
 		compile(files(project(":spring-core").cglibRepackJar))
 		optional("javax.inject:javax.inject:1")
 		optional("javax.el:javax.el-api:${elApiVersion}")
+		optional("org.jetbrains.kotlin:kotlin-reflect:${kotlinVersion}")
+		optional("org.jetbrains.kotlin:kotlin-stdlib:${kotlinVersion}")
 		optional("org.yaml:snakeyaml:${snakeyamlVersion}")
 		testCompile("org.apache.tomcat.embed:tomcat-embed-core:${tomcatVersion}")
 	}
@@ -439,6 +449,7 @@ project("spring-beans") {
 
 project("spring-beans-groovy") {
 	description "Groovy Bean Definitions"
+
 	merge.into = project(":spring-beans")
 	apply plugin: "groovy"
 
@@ -448,7 +459,7 @@ project("spring-beans-groovy") {
 	}
 
 	// this module's Java and Groovy sources need to be compiled together
-	compileJava.enabled=false
+	compileJava.enabled = false
 	sourceSets {
 		main {
 			groovy {
@@ -501,6 +512,7 @@ project("spring-instrument") {
 
 project("spring-context") {
 	description = "Spring Context"
+
 	apply plugin: "groovy"
 
 	dependencies {
@@ -569,8 +581,10 @@ project("spring-oxm") {
 project("spring-messaging") {
 	description = "Spring Messaging"
 
-	// Disabled since Kotlin compiler does not support JDK 9 yet
-	//apply plugin: "kotlin"
+	// Kotlin compiler does not support JDK 9 yet
+	if (!JavaVersion.current().java9Compatible) {
+		apply plugin: "kotlin"
+	}
 
 	dependencies {
 		compile(project(":spring-beans"))
@@ -712,9 +726,11 @@ project("spring-context-indexer") {
 project("spring-web") {
 	description = "Spring Web"
 
+	// Kotlin compiler does not support JDK 9 yet
+	if (!JavaVersion.current().java9Compatible) {
+		apply plugin: "kotlin"
+	}
 	apply plugin: "groovy"
-	// Disabled since Kotlin compiler does not support JDK 9 yet
-	//apply plugin: "kotlin"
 
 	dependencies {
 		compile(project(":spring-aop"))  // for JaxWsPortProxyFactoryBean
@@ -803,8 +819,10 @@ project("spring-web") {
 project("spring-web-reactive") {
 	description = "Spring Web Reactive"
 
-	// Disabled since Kotlin compiler does not support JDK 9 yet
-	//apply plugin: "kotlin"
+	// Kotlin compiler does not support JDK 9 yet
+	if (!JavaVersion.current().java9Compatible) {
+		apply plugin: "kotlin"
+	}
 
 	dependencies {
 		compile(project(":spring-core"))
@@ -824,6 +842,17 @@ project("spring-web-reactive") {
 		}
 		optional("io.reactivex:rxjava:${rxjavaVersion}")
 		optional("io.reactivex:rxjava-reactive-streams:${rxjavaAdapterVersion}")
+		optional("javax.websocket:javax.websocket-api:${websocketVersion}")
+		optional("org.apache.tomcat:tomcat-websocket:${tomcatVersion}") {
+			exclude group: "org.apache.tomcat", module: "tomcat-websocket-api"
+			exclude group: "org.apache.tomcat", module: "tomcat-servlet-api"
+		}
+		optional("org.eclipse.jetty.websocket:websocket-server:${jettyVersion}") {
+			exclude group: "javax.servlet", module: "javax.servlet"
+		}
+		optional("io.undertow:undertow-websockets-jsr:${undertowVersion}") {
+			exclude group: "org.jboss.spec.javax.websocket", module: "jboss-websocket-api_1.1_spec"
+		}
 		testCompile("io.projectreactor.addons:reactor-test:${reactorCoreVersion}")
 		testCompile("javax.validation:validation-api:${beanvalVersion}")
 		testCompile("org.hibernate:hibernate-validator:${hibval5Version}")
@@ -839,6 +868,7 @@ project("spring-web-reactive") {
 		testCompile("org.slf4j:slf4j-jcl:${slf4jVersion}")
 		testCompile("org.jetbrains.kotlin:kotlin-reflect:${kotlinVersion}")
 		testCompile("org.jetbrains.kotlin:kotlin-stdlib:${kotlinVersion}")
+	    testCompile("com.squareup.okhttp3:mockwebserver:${okhttp3Version}")
 		testRuntime("javax.el:javax.el-api:${elApiVersion}")
 		testRuntime("org.glassfish:javax.el:3.0.1-b08")
 		testRuntime("com.sun.xml.bind:jaxb-core:${jaxbVersion}")
@@ -1416,7 +1446,7 @@ configure(rootProject) {
 
 	task wrapper(type: Wrapper) {
 		description = "Generates gradlew[.bat] scripts"
-		gradleVersion = '3.0'
+		gradleVersion = '3.2.1'
 
 		doLast() {
 			def gradleOpts = "-XX:MaxMetaspaceSize=1024m -Xmx1024m"
@@ -1446,6 +1476,22 @@ configure(project(':spring-core')) {
 		}
 	}
 }
+
+/*
+ * Copyright 2002-2016 the original author or authors.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 
 /*
  * Support publication of artifacts versioned by topic branch.

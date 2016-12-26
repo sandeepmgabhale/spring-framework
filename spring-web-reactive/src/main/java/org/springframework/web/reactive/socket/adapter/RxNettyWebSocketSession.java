@@ -13,11 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.springframework.web.reactive.socket.adapter;
 
-import java.net.URI;
-
+import io.netty.channel.Channel;
+import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
+import io.netty.handler.codec.http.websocketx.CloseWebSocketFrame;
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
+import io.netty.handler.codec.http.websocketx.WebSocketFrameAggregator;
 import io.reactivex.netty.protocol.http.ws.WebSocketConnection;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
@@ -26,12 +31,14 @@ import rx.Observable;
 import rx.RxReactiveStreams;
 
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
+import org.springframework.util.Assert;
 import org.springframework.web.reactive.socket.CloseStatus;
+import org.springframework.web.reactive.socket.HandshakeInfo;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 
 /**
- * Spring {@link WebSocketSession} adapter for RxNetty's
+ * Spring {@link WebSocketSession} implementation that adapts to the RxNetty
  * {@link io.reactivex.netty.protocol.http.ws.WebSocketConnection}.
  *
  * @author Rossen Stoyanchev
@@ -39,17 +46,47 @@ import org.springframework.web.reactive.socket.WebSocketSession;
  */
 public class RxNettyWebSocketSession extends NettyWebSocketSessionSupport<WebSocketConnection> {
 
+	/**
+	 * The {@code ChannelHandler} name to use when inserting a
+	 * {@link WebSocketFrameAggregator} in the channel pipeline.
+	 */
+	public static final String FRAME_AGGREGATOR_NAME = "websocket-frame-aggregator";
 
-	public RxNettyWebSocketSession(WebSocketConnection conn, URI uri, NettyDataBufferFactory factory) {
-		super(conn, uri, factory);
+
+	public RxNettyWebSocketSession(WebSocketConnection conn, HandshakeInfo info,
+			NettyDataBufferFactory factory) {
+
+		super(conn, info, factory);
+	}
+
+
+	/**
+	 * Inserts an {@link WebSocketFrameAggregator} after the
+	 * {@code WebSocketFrameDecoder} for receiving full messages.
+	 * @param channel the channel for the session
+	 * @param frameDecoderName the name of the WebSocketFrame decoder
+	 */
+	public RxNettyWebSocketSession aggregateFrames(Channel channel, String frameDecoderName) {
+		ChannelPipeline pipeline = channel.pipeline();
+		if (pipeline.context(FRAME_AGGREGATOR_NAME) != null) {
+			logger.trace("WebSocketFrameAggregator already registered.");
+			return this;
+		}
+		ChannelHandlerContext frameDecoder = pipeline.context(frameDecoderName);
+		Assert.notNull(frameDecoder, "WebSocketFrameDecoder not found: " + frameDecoderName);
+		ChannelHandler frameAggregator = new WebSocketFrameAggregator(DEFAULT_FRAME_MAX_SIZE);
+		pipeline.addAfter(frameDecoder.name(), FRAME_AGGREGATOR_NAME, frameAggregator);
+		return this;
 	}
 
 
 	@Override
 	public Flux<WebSocketMessage> receive() {
-		Observable<WebSocketFrame> observable = getDelegate().getInput();
-		Flux<WebSocketFrame> flux = Flux.from(RxReactiveStreams.toPublisher(observable));
-		return toMessageFlux(flux);
+		Observable<WebSocketMessage> messages = getDelegate()
+				.getInput()
+				.filter(frame -> !(frame instanceof CloseWebSocketFrame))
+				.map(super::toMessage);
+		return Flux.from(RxReactiveStreams.toPublisher(messages));
 	}
 
 	@Override
@@ -60,7 +97,7 @@ public class RxNettyWebSocketSession extends NettyWebSocketSessionSupport<WebSoc
 	}
 
 	@Override
-	protected Mono<Void> closeInternal(CloseStatus status) {
+	public Mono<Void> close(CloseStatus status) {
 		Observable<Void> completion = getDelegate().close();
 		return Mono.from(RxReactiveStreams.toPublisher(completion));
 	}

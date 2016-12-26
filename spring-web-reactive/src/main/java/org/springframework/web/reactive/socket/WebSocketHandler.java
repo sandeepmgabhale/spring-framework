@@ -21,7 +21,7 @@ import java.util.List;
 import reactor.core.publisher.Mono;
 
 /**
- * Handler for a WebSocket-style session interaction.
+ * Handler for a WebSocket session.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -30,16 +30,17 @@ public interface WebSocketHandler {
 
 	/**
 	 * Return the list of sub-protocols supported by this handler.
-	 * <p>By default an empty list is returned.
+	 * <p>By default an empty array is returned.
 	 */
-	default List<String> getSubProtocols() {
-		return Collections.emptyList();
+	default String[] getSubProtocols() {
+		return new String[0];
 	}
 
 	/**
-	 * Handle the given WebSocket session.
-	 * @param session the session
-	 * @return signals completion for session handling
+	 * Handle the WebSocket session.
+	 * @param session the session to handle
+	 * @return completion {@code Mono<Void>} to indicate the outcome of the
+	 * WebSocket session handling.
 	 */
 	Mono<Void> handle(WebSocketSession session);
 

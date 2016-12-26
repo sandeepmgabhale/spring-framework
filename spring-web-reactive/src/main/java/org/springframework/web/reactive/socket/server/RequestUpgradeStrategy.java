@@ -15,7 +15,7 @@
  */
 package org.springframework.web.reactive.socket.server;
 
-import java.util.Map;
+import java.util.Optional;
 
 import reactor.core.publisher.Mono;
 
@@ -25,14 +25,13 @@ import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.server.ServerWebExchange;
 
 /**
- * A strategy for upgrading an HTTP request to a WebSocket interaction depending
- * on the underlying HTTP runtime.
+ * A strategy for upgrading an HTTP request to a WebSocket session depending
+ * on the underlying network runtime.
  *
  * <p>Typically there is one such strategy for every {@link ServerHttpRequest}
- * and {@link ServerHttpResponse} implementation type except in the case of
- * Servlet containers for which there is no standard API to upgrade a request.
- * JSR-356 does have programmatic endpoint registration but that is only
- * intended for use on startup and not per request.
+ * and {@link ServerHttpResponse} type except in the case of Servlet containers
+ * for which the standard Java WebSocket API JSR-356 does not define a way to
+ * upgrade a request so a custom strategy is needed for every Servlet container.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -40,12 +39,15 @@ import org.springframework.web.server.ServerWebExchange;
 public interface RequestUpgradeStrategy {
 
 	/**
-	 * Upgrade the request to a WebSocket interaction and adapt the given
-	 * Spring {@link WebSocketHandler} to the underlying runtime WebSocket API.
+	 * Upgrade to a WebSocket session and handle it with the given handler.
 	 * @param exchange the current exchange
-	 * @param webSocketHandler handler for WebSocket session
-	 * @return a completion Mono for the WebSocket session handling
+	 * @param webSocketHandler handler for the WebSocket session
+	 * @param subProtocol the selected sub-protocol got the handler
+	 * @return completion {@code Mono<Void>} to indicate the outcome of the
+	 * WebSocket session handling.
 	 */
-	Mono<Void> upgrade(ServerWebExchange exchange, WebSocketHandler webSocketHandler);
+	@SuppressWarnings("OptionalUsedAsFieldOrParameterType")
+	Mono<Void> upgrade(ServerWebExchange exchange, WebSocketHandler webSocketHandler,
+			Optional<String> subProtocol);
 
 }

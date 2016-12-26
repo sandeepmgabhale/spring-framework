@@ -125,8 +125,7 @@ class ConfigurationClassParser {
 
 	private final ConditionEvaluator conditionEvaluator;
 
-	private final Map<ConfigurationClass, ConfigurationClass> configurationClasses =
-			new LinkedHashMap<>();
+	private final Map<ConfigurationClass, ConfigurationClass> configurationClasses = new LinkedHashMap<>();
 
 	private final Map<String, ConfigurationClass> knownSuperclasses = new HashMap<>();
 
@@ -291,7 +290,7 @@ class ConfigurationClassParser {
 		}
 
 		// Process individual @Bean methods
-		Set<MethodMetadata> beanMethods = sourceClass.getMetadata().getAnnotatedMethods(Bean.class.getName());
+		Set<MethodMetadata> beanMethods = retrieveBeanMethodMetadata(sourceClass);
 		for (MethodMetadata methodMetadata : beanMethods) {
 			configClass.addBeanMethod(new BeanMethod(methodMetadata, configClass));
 		}
@@ -341,7 +340,7 @@ class ConfigurationClassParser {
 	 */
 	private void processInterfaces(ConfigurationClass configClass, SourceClass sourceClass) throws IOException {
 		for (SourceClass ifc : sourceClass.getInterfaces()) {
-			Set<MethodMetadata> beanMethods = ifc.getMetadata().getAnnotatedMethods(Bean.class.getName());
+			Set<MethodMetadata> beanMethods = retrieveBeanMethodMetadata(ifc);
 			for (MethodMetadata methodMetadata : beanMethods) {
 				if (!methodMetadata.isAbstract()) {
 					// A default method or other concrete method on a Java 8+ interface...
@@ -350,6 +349,39 @@ class ConfigurationClassParser {
 			}
 			processInterfaces(configClass, ifc);
 		}
+	}
+
+	/**
+	 * Retrieve the metadata for all <code>@Bean</code> methods.
+	 */
+	private Set<MethodMetadata> retrieveBeanMethodMetadata(SourceClass sourceClass) {
+		AnnotationMetadata original = sourceClass.getMetadata();
+		Set<MethodMetadata> beanMethods = original.getAnnotatedMethods(Bean.class.getName());
+		if (beanMethods.size() > 1 && original instanceof StandardAnnotationMetadata) {
+			// Try reading the class file via ASM for deterministic declaration order...
+			// Unfortunately, the JVM's standard reflection returns methods in arbitrary
+			// order, even between different runs of the same application on the same JVM.
+			try {
+				AnnotationMetadata asm =
+						this.metadataReaderFactory.getMetadataReader(original.getClassName()).getAnnotationMetadata();
+				Set<MethodMetadata> asmMethods = asm.getAnnotatedMethods(Bean.class.getName());
+				Set<MethodMetadata> reflectionMethods = beanMethods;
+				beanMethods = new LinkedHashSet<>();
+				for (MethodMetadata asmMethod : asmMethods) {
+					for (MethodMetadata reflectionMethod : reflectionMethods) {
+						if (reflectionMethod.getMethodName().equals(asmMethod.getMethodName())) {
+							beanMethods.add(reflectionMethod);
+							break;
+						}
+					}
+				}
+			}
+			catch (IOException ex) {
+				logger.debug("Failed to read class file via ASM for determining @Bean method order", ex);
+				// No worries, let's continue with the reflection metadata we started with...
+			}
+		}
+		return beanMethods;
 	}
 
 	/**
@@ -588,7 +620,7 @@ class ConfigurationClassParser {
 		if (metadata instanceof StandardAnnotationMetadata) {
 			return asSourceClass(((StandardAnnotationMetadata) metadata).getIntrospectedClass());
 		}
-		return asSourceClass(configurationClass.getMetadata().getClassName());
+		return asSourceClass(metadata.getClassName());
 	}
 
 	/**
@@ -644,20 +676,21 @@ class ConfigurationClassParser {
 		}
 
 		@Override
-		public void removeImportingClassFor(String importedClass) {
-			for (List<AnnotationMetadata> list : this.imports.values()) {
-				for (Iterator<AnnotationMetadata> iterator = list.iterator(); iterator.hasNext();) {
-					if (iterator.next().getClassName().equals(importedClass)) {
-						iterator.remove();
-					}
-				}
-			}
-		}
-
-		@Override
 		public AnnotationMetadata getImportingClassFor(String importedClass) {
 			List<AnnotationMetadata> list = this.imports.get(importedClass);
 			return (!CollectionUtils.isEmpty(list) ? list.get(list.size() - 1) : null);
+		}
+
+		@Override
+		public void removeImportingClass(String importingClass) {
+			for (List<AnnotationMetadata> list : this.imports.values()) {
+				for (Iterator<AnnotationMetadata> iterator = list.iterator(); iterator.hasNext();) {
+					if (iterator.next().getClassName().equals(importingClass)) {
+						iterator.remove();
+						break;
+					}
+				}
+			}
 		}
 
 		/**

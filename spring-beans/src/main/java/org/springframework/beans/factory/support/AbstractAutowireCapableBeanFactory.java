@@ -38,6 +38,7 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.function.Supplier;
 
 import org.springframework.beans.BeanUtils;
 import org.springframework.beans.BeanWrapper;
@@ -74,6 +75,7 @@ import org.springframework.core.GenericTypeResolver;
 import org.springframework.core.MethodParameter;
 import org.springframework.core.ParameterNameDiscoverer;
 import org.springframework.core.PriorityOrdered;
+import org.springframework.core.ResolvableType;
 import org.springframework.util.ClassUtils;
 import org.springframework.util.ObjectUtils;
 import org.springframework.util.ReflectionUtils;
@@ -526,6 +528,7 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 		}
 		final Object bean = (instanceWrapper != null ? instanceWrapper.getWrappedInstance() : null);
 		Class<?> beanType = (instanceWrapper != null ? instanceWrapper.getWrappedClass() : null);
+		mbd.resolvedTargetType = beanType;
 
 		// Allow post-processors to modify the merged bean definition.
 		synchronized (mbd.postProcessingLock) {
@@ -672,9 +675,9 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 	 * @see #createBean
 	 */
 	protected Class<?> getTypeForFactoryMethod(String beanName, RootBeanDefinition mbd, Class<?>... typesToMatch) {
-		Class<?> preResolved = mbd.resolvedFactoryMethodReturnType;
-		if (preResolved != null) {
-			return preResolved;
+		ResolvableType cachedReturnType = mbd.factoryMethodReturnType;
+		if (cachedReturnType != null) {
+			return cachedReturnType.resolve();
 		}
 
 		Class<?> factoryClass;
@@ -698,11 +701,12 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 		if (factoryClass == null) {
 			return null;
 		}
+		factoryClass = ClassUtils.getUserClass(factoryClass);
 
 		// If all factory methods have the same return type, return that type.
 		// Can't clearly figure out exact method due to type converting / autowiring!
 		Class<?> commonType = null;
-		boolean cache = false;
+		Method uniqueCandidate = null;
 		int minNrOfArgs = mbd.getConstructorArgumentValues().getArgumentCount();
 		Method[] candidates = ReflectionUtils.getUniqueDeclaredMethods(factoryClass);
 		for (Method factoryMethod : candidates) {
@@ -736,8 +740,12 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 						Class<?> returnType = AutowireUtils.resolveReturnTypeForFactoryMethod(
 								factoryMethod, args, getBeanClassLoader());
 						if (returnType != null) {
-							cache = true;
+							uniqueCandidate = (commonType == null ? factoryMethod : null);
 							commonType = ClassUtils.determineCommonAncestor(returnType, commonType);
+							if (commonType == null) {
+								// Ambiguous return types found: return null to indicate "not determinable".
+								return null;
+							}
 						}
 					}
 					catch (Throwable ex) {
@@ -747,22 +755,22 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 					}
 				}
 				else {
+					uniqueCandidate = (commonType == null ? factoryMethod : null);
 					commonType = ClassUtils.determineCommonAncestor(factoryMethod.getReturnType(), commonType);
+					if (commonType == null) {
+						// Ambiguous return types found: return null to indicate "not determinable".
+						return null;
+					}
 				}
 			}
 		}
 
 		if (commonType != null) {
 			// Clear return type found: all factory methods return same type.
-			if (cache) {
-				mbd.resolvedFactoryMethodReturnType = commonType;
-			}
-			return commonType;
+			mbd.factoryMethodReturnType = (uniqueCandidate != null ?
+					ResolvableType.forMethodReturnType(uniqueCandidate) : ResolvableType.forClass(commonType));
 		}
-		else {
-			// Ambiguous return types found: return null to indicate "not determinable".
-			return null;
-		}
+		return commonType;
 	}
 
 	/**
@@ -1028,6 +1036,13 @@ public abstract class AbstractAutowireCapableBeanFactory extends AbstractBeanFac
 		if (beanClass != null && !Modifier.isPublic(beanClass.getModifiers()) && !mbd.isNonPublicAccessAllowed()) {
 			throw new BeanCreationException(mbd.getResourceDescription(), beanName,
 					"Bean class isn't public, and non-public access not allowed: " + beanClass.getName());
+		}
+
+		Supplier<?> instanceSupplier = mbd.getInstanceSupplier();
+		if (instanceSupplier != null) {
+			BeanWrapper bw = new BeanWrapperImpl(instanceSupplier.get());
+			initBeanWrapper(bw);
+			return bw;
 		}
 
 		if (mbd.getFactoryMethodName() != null)  {

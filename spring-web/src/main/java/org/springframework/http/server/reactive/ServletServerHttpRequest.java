@@ -22,6 +22,9 @@ import java.net.URISyntaxException;
 import java.nio.charset.Charset;
 import java.util.Enumeration;
 import java.util.Map;
+import javax.servlet.AsyncContext;
+import javax.servlet.AsyncEvent;
+import javax.servlet.AsyncListener;
 import javax.servlet.ReadListener;
 import javax.servlet.ServletInputStream;
 import javax.servlet.http.Cookie;
@@ -51,19 +54,13 @@ public class ServletServerHttpRequest extends AbstractServerHttpRequest {
 
 	private final HttpServletRequest request;
 
-	private final DataBufferFactory dataBufferFactory;
-
-	private final int bufferSize;
-
-	private final Object bodyPublisherMonitor = new Object();
-
-	private volatile RequestBodyPublisher bodyPublisher;
+	private final RequestBodyPublisher bodyPublisher;
 
 	private final Object cookieLock = new Object();
 
 
-	public ServletServerHttpRequest(HttpServletRequest request,
-			DataBufferFactory bufferFactory, int bufferSize) {
+	public ServletServerHttpRequest(HttpServletRequest request, AsyncContext asyncContext,
+			DataBufferFactory bufferFactory, int bufferSize) throws IOException {
 
 		super(initUri(request), initHeaders(request));
 
@@ -71,9 +68,15 @@ public class ServletServerHttpRequest extends AbstractServerHttpRequest {
 		Assert.isTrue(bufferSize > 0, "'bufferSize' must be higher than 0");
 
 		this.request = request;
-		this.dataBufferFactory = bufferFactory;
-		this.bufferSize = bufferSize;
+
+		asyncContext.addListener(new RequestAsyncListener());
+
+		// Tomcat expects ReadListener registration on initial thread
+		ServletInputStream inputStream = request.getInputStream();
+		this.bodyPublisher = new RequestBodyPublisher(inputStream, bufferFactory, bufferSize);
+		this.bodyPublisher.registerReadListener();
 	}
+
 
 	private static URI initUri(HttpServletRequest request) {
 		Assert.notNull(request, "'request' must not be null");
@@ -163,67 +166,52 @@ public class ServletServerHttpRequest extends AbstractServerHttpRequest {
 
 	@Override
 	public Flux<DataBuffer> getBody() {
-		try {
-			RequestBodyPublisher bodyPublisher = this.bodyPublisher;
-			if (bodyPublisher == null) {
-				synchronized (this.bodyPublisherMonitor) {
-					bodyPublisher = this.bodyPublisher;
-					if (bodyPublisher == null) {
-						bodyPublisher = createBodyPublisher();
-						this.bodyPublisher = bodyPublisher;
-					}
-				}
-			}
-			return Flux.from(bodyPublisher);
-		}
-		catch (IOException ex) {
-			return Flux.error(ex);
-		}
-	}
-
-	/** Handle a timeout/error callback from the Servlet container */
-	void handleAsyncListenerError(Throwable ex) {
-		if (this.bodyPublisher != null) {
-			this.bodyPublisher.onError(ex);
-		}
-	}
-
-	/** Handle a complete callback from the Servlet container */
-	void handleAsyncListenerComplete() {
-		if (this.bodyPublisher != null) {
-			this.bodyPublisher.onAllDataRead();
-		}
-	}
-
-	private RequestBodyPublisher createBodyPublisher() throws IOException {
-		RequestBodyPublisher bodyPublisher = new RequestBodyPublisher(
-				this.request.getInputStream(), this.dataBufferFactory, this.bufferSize);
-		bodyPublisher.registerListener();
-		return bodyPublisher;
+		return Flux.from(this.bodyPublisher);
 	}
 
 
-	private static class RequestBodyPublisher extends AbstractRequestBodyPublisher {
+	private final class RequestAsyncListener implements AsyncListener {
 
-		private final RequestBodyPublisher.RequestBodyReadListener readListener =
-				new RequestBodyPublisher.RequestBodyReadListener();
+		@Override
+		public void onStartAsync(AsyncEvent event) {}
+
+		@Override
+		public void onTimeout(AsyncEvent event) {
+			Throwable ex = event.getThrowable();
+			ex = ex != null ? ex : new IllegalStateException("Async operation timeout.");
+			bodyPublisher.onError(ex);
+		}
+
+		@Override
+		public void onError(AsyncEvent event) {
+			bodyPublisher.onError(event.getThrowable());
+		}
+
+		@Override
+		public void onComplete(AsyncEvent event) {
+			bodyPublisher.onAllDataRead();
+		}
+	}
+
+	private static class RequestBodyPublisher extends AbstractListenerReadPublisher<DataBuffer> {
 
 		private final ServletInputStream inputStream;
 
-		private final DataBufferFactory dataBufferFactory;
+		private final DataBufferFactory bufferFactory;
 
 		private final byte[] buffer;
 
+
 		public RequestBodyPublisher(ServletInputStream inputStream,
-				DataBufferFactory dataBufferFactory, int bufferSize) {
+				DataBufferFactory bufferFactory, int bufferSize) {
 
 			this.inputStream = inputStream;
-			this.dataBufferFactory = dataBufferFactory;
+			this.bufferFactory = bufferFactory;
 			this.buffer = new byte[bufferSize];
 		}
 
-		public void registerListener() throws IOException {
-			this.inputStream.setReadListener(this.readListener);
+		public void registerReadListener() throws IOException {
+			this.inputStream.setReadListener(new RequestBodyPublisherReadListener());
 		}
 
 		@Override
@@ -242,7 +230,7 @@ public class ServletServerHttpRequest extends AbstractServerHttpRequest {
 				}
 
 				if (read > 0) {
-					DataBuffer dataBuffer = this.dataBufferFactory.allocateBuffer(read);
+					DataBuffer dataBuffer = this.bufferFactory.allocateBuffer(read);
 					dataBuffer.write(this.buffer, 0, read);
 					return dataBuffer;
 				}
@@ -250,8 +238,7 @@ public class ServletServerHttpRequest extends AbstractServerHttpRequest {
 			return null;
 		}
 
-
-		private class RequestBodyReadListener implements ReadListener {
+		private class RequestBodyPublisherReadListener implements ReadListener {
 
 			@Override
 			public void onDataAvailable() throws IOException {

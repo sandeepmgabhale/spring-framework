@@ -15,24 +15,26 @@
  */
 package org.springframework.web.reactive.socket.adapter;
 
-import java.net.URI;
-
 import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 import org.reactivestreams.Publisher;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
-import reactor.ipc.netty.http.HttpInbound;
-import reactor.ipc.netty.http.HttpOutbound;
+import reactor.ipc.netty.NettyInbound;
+import reactor.ipc.netty.NettyOutbound;
+import reactor.ipc.netty.NettyPipeline;
+import reactor.ipc.netty.http.websocket.WebsocketInbound;
+import reactor.ipc.netty.http.websocket.WebsocketOutbound;
 
 import org.springframework.core.io.buffer.NettyDataBufferFactory;
 import org.springframework.web.reactive.socket.CloseStatus;
+import org.springframework.web.reactive.socket.HandshakeInfo;
 import org.springframework.web.reactive.socket.WebSocketMessage;
 import org.springframework.web.reactive.socket.WebSocketSession;
 
 
 /**
- * Spring {@link WebSocketSession} adapter for RxNetty's
- * {@link io.reactivex.netty.protocol.http.ws.WebSocketConnection}.
+ * Spring {@link WebSocketSession} implementation that adapts to Reactor Netty's
+ * WebSocket {@link NettyInbound} and {@link NettyOutbound}.
  *
  * @author Rossen Stoyanchev
  * @since 5.0
@@ -41,55 +43,59 @@ public class ReactorNettyWebSocketSession
 		extends NettyWebSocketSessionSupport<ReactorNettyWebSocketSession.WebSocketConnection> {
 
 
-	protected ReactorNettyWebSocketSession(HttpInbound inbound, HttpOutbound outbound,
-			URI uri, NettyDataBufferFactory factory) {
+	public ReactorNettyWebSocketSession(WebsocketInbound inbound, WebsocketOutbound outbound,
+			HandshakeInfo info, NettyDataBufferFactory bufferFactory) {
 
-		super(new WebSocketConnection(inbound, outbound), uri, factory);
+		super(new WebSocketConnection(inbound, outbound), info, bufferFactory);
 	}
 
 
 	@Override
 	public Flux<WebSocketMessage> receive() {
-		HttpInbound inbound = getDelegate().getHttpInbound();
-		return toMessageFlux(inbound.receiveObject().cast(WebSocketFrame.class));
+		return getDelegate().getInbound()
+				.aggregateFrames(DEFAULT_FRAME_MAX_SIZE)
+				.receiveFrames()
+				.map(super::toMessage);
 	}
 
 	@Override
 	public Mono<Void> send(Publisher<WebSocketMessage> messages) {
-		Flux<WebSocketFrame> frameFlux = Flux.from(messages).map(this::toFrame);
-		HttpOutbound outbound = getDelegate().getHttpOutbound();
-		outbound.flushEach();
-		return outbound.sendObject(frameFlux);
+		Flux<WebSocketFrame> frames = Flux.from(messages).map(this::toFrame);
+		return getDelegate().getOutbound()
+				.options(NettyPipeline.SendOptions::flushOnEach)
+				.sendObject(frames)
+				.then();
 	}
 
 	@Override
-	protected Mono<Void> closeInternal(CloseStatus status) {
+	public Mono<Void> close(CloseStatus status) {
 		return Mono.error(new UnsupportedOperationException(
-				"Currently in Reactor Netty applications are expected to use the Cancellation" +
-						"returned from subscribing to the input Flux to close the WebSocket session."));
+				"Currently in Reactor Netty applications are expected to use the " +
+						"Cancellation returned from subscribing to the \"receive\"-side Flux " +
+						"in order to close the WebSocket session."));
 	}
 
 
 	/**
-	 * Simple container for {@link HttpInbound} and {@link HttpOutbound}.
+	 * Simple container for {@link NettyInbound} and {@link NettyOutbound}.
 	 */
 	public static class WebSocketConnection {
 
-		private final HttpInbound inbound;
+		private final WebsocketInbound inbound;
 
-		private final HttpOutbound outbound;
+		private final WebsocketOutbound outbound;
 
 
-		public WebSocketConnection(HttpInbound inbound, HttpOutbound outbound) {
+		public WebSocketConnection(WebsocketInbound inbound, WebsocketOutbound outbound) {
 			this.inbound = inbound;
 			this.outbound = outbound;
 		}
 
-		public HttpInbound getHttpInbound() {
+		public WebsocketInbound getInbound() {
 			return this.inbound;
 		}
 
-		public HttpOutbound getHttpOutbound() {
+		public WebsocketOutbound getOutbound() {
 			return this.outbound;
 		}
 	}

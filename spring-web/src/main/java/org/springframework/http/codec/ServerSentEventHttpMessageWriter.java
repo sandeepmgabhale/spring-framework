@@ -39,7 +39,7 @@ import org.springframework.util.Assert;
 import org.springframework.util.MimeTypeUtils;
 
 /**
- * Encoder that supports a stream of {@link ServerSentEvent}s and also plain
+ * Writer that supports a stream of {@link ServerSentEvent}s and also plain
  * {@link Object}s which is the same as an {@link ServerSentEvent} with data
  * only.
  *
@@ -50,7 +50,7 @@ import org.springframework.util.MimeTypeUtils;
 public class ServerSentEventHttpMessageWriter implements HttpMessageWriter<Object> {
 
 	/**
-	 * Server-Sent Events hint expecting a {@link Boolean} value which when set to true
+	 * Server-Sent Events hint key expecting a {@link Boolean} value which when set to true
 	 * will adapt the content in order to comply with Server-Sent Events recommendation.
 	 * For example, it will append "data:" after each line break with data encoders
 	 * supporting it.
